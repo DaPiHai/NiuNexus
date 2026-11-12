@@ -1,6 +1,7 @@
 # Local toolchains and development artifacts
 .tools/
 .dev/
+.zcode/
 
 # Build outputs
 *.fpk
