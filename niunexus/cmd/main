@@ -1,0 +1,244 @@
+#!/bin/bash
+# NiuNexus lifecycle: start the privileged core first, then the unprivileged
+# gateway web process. Both are tracked with PID files so fnOS can stop them
+# deterministically.
+set -u
+
+APP_NAME="niunexus"
+APP_DIR="${TRIM_APPDEST:-/var/apps/niunexus/target}"
+ETC_DIR="${TRIM_PKGETC:-/var/apps/niunexus/etc}"
+VAR_DIR="${TRIM_PKGVAR:-/var/apps/niunexus/var}"
+APP_USER="${TRIM_USERNAME:-niunexus}"
+APP_UID="${TRIM_UID:-}"
+APP_GID="${TRIM_GID:-}"
+GATEWAY_PREFIX="/app/niunexus"
+
+CORE_BIN="${APP_DIR}/server/niunexus-core"
+WEB_BIN="${APP_DIR}/server/niunexus-web"
+CORE_SOCKET="${VAR_DIR}/core.sock"
+APP_SOCKET="${APP_DIR}/app.sock"
+CORE_PID="${VAR_DIR}/core.pid"
+WEB_PID="${VAR_DIR}/web.pid"
+CORE_LOG="${VAR_DIR}/core.log"
+WEB_LOG="${VAR_DIR}/web.log"
+MAIN_LOG="${VAR_DIR}/main.log"
+LOCK_FILE="${VAR_DIR}/main.lock"
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+umask 027
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $*" >> "${MAIN_LOG}" 2>/dev/null || true
+}
+
+fail() {
+    log_msg "ERROR: $*"
+    if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+        echo "NiuNexus: $*" >> "${TRIM_TEMP_LOGFILE}" 2>/dev/null || true
+    fi
+    exit 1
+}
+
+alive() {
+    local pid_file="$1"
+    [ -r "${pid_file}" ] || return 1
+    local pid
+    pid="$(head -n 1 "${pid_file}" 2>/dev/null | tr -d '[:space:]')"
+    [ -n "${pid}" ] || return 1
+    kill -0 "${pid}" 2>/dev/null
+}
+
+read_pid() {
+    head -n 1 "$1" 2>/dev/null | tr -d '[:space:]'
+}
+
+rotate_log() {
+    local file="$1"
+    [ -f "${file}" ] || return 0
+    local size
+    size="$(stat -c '%s' "${file}" 2>/dev/null || echo 0)"
+    if [ "${size}" -gt 5242880 ]; then
+        mv -f "${file}" "${file}.1" 2>/dev/null || true
+    fi
+}
+
+make_token() {
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 32
+    else
+        od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
+    fi
+}
+
+prepare_dirs() {
+    mkdir -p "${VAR_DIR}/backups" "${ETC_DIR}" || fail "无法创建应用目录"
+    if [ -z "${APP_UID}" ] && command -v id >/dev/null 2>&1; then
+        APP_UID="$(id -u "${APP_USER}" 2>/dev/null || true)"
+    fi
+    if [ -z "${APP_GID}" ] && command -v id >/dev/null 2>&1; then
+        APP_GID="$(id -g "${APP_USER}" 2>/dev/null || true)"
+    fi
+    if [ "$(id -u)" = "0" ] && [ -n "${APP_UID}" ]; then
+        # The web user owns runtime state so it can write its PID file and
+        # reach the core socket. Configuration stays root-only.
+        chown "${APP_UID}:${APP_GID:-${APP_UID}}" "${VAR_DIR}" 2>/dev/null || true
+        chown root:root "${ETC_DIR}" 2>/dev/null || true
+        chmod 0750 "${VAR_DIR}" 2>/dev/null || true
+        chmod 0700 "${ETC_DIR}" 2>/dev/null || true
+    else
+        chmod 0750 "${VAR_DIR}" "${ETC_DIR}" 2>/dev/null || true
+    fi
+    [ -x "${CORE_BIN}" ] || fail "缺少 core 可执行文件: ${CORE_BIN}"
+    [ -x "${WEB_BIN}" ] || fail "缺少 web 可执行文件: ${WEB_BIN}"
+    command -v runuser >/dev/null 2>&1 || fail "系统缺少 runuser，无法降权启动 Web"
+    id -u "${APP_USER}" >/dev/null 2>&1 || fail "应用用户不存在: ${APP_USER}"
+    rotate_log "${CORE_LOG}"
+    rotate_log "${WEB_LOG}"
+    rotate_log "${MAIN_LOG}"
+}
+
+start_core() {
+    if alive "${CORE_PID}" && [ -S "${CORE_SOCKET}" ]; then
+        log_msg "core already running (pid=$(read_pid "${CORE_PID}"))"
+        return 0
+    fi
+    rm -f "${CORE_PID}" "${CORE_SOCKET}"
+    log_msg "starting core"
+    NIUNEXUS_CONFIG_DIR="${ETC_DIR}" \
+    NIUNEXUS_VAR_DIR="${VAR_DIR}" \
+    NIUNEXUS_CORE_SOCKET="${CORE_SOCKET}" \
+    NIUNEXUS_RPC_TOKEN="${TOKEN}" \
+    NIUNEXUS_APP_UID="${APP_UID}" \
+    NIUNEXUS_APP_GID="${APP_GID}" \
+        nohup "${CORE_BIN}" -socket "${CORE_SOCKET}" >>"${CORE_LOG}" 2>&1 9>&- &
+    local pid=$!
+    printf '%s\n' "${pid}" >"${CORE_PID}"
+    chmod 600 "${CORE_PID}" 2>/dev/null || true
+
+    local i
+    for i in $(seq 1 50); do
+        if ! kill -0 "${pid}" 2>/dev/null; then
+            log_msg "core exited during startup"
+            rm -f "${CORE_PID}"
+            return 1
+        fi
+        if [ -S "${CORE_SOCKET}" ]; then
+            log_msg "core ready (pid=${pid})"
+            return 0
+        fi
+        sleep 0.2
+    done
+    log_msg "core socket timeout: ${CORE_SOCKET}"
+    return 1
+}
+
+start_web() {
+    if alive "${WEB_PID}" && [ -S "${APP_SOCKET}" ]; then
+        log_msg "web already running (pid=$(read_pid "${WEB_PID}"))"
+        return 0
+    fi
+    rm -f "${WEB_PID}" "${APP_SOCKET}"
+    log_msg "starting web as ${APP_USER}"
+    nohup runuser -u "${APP_USER}" -- env \
+        NIUNEXUS_CORE_SOCKET="${CORE_SOCKET}" \
+        NIUNEXUS_APP_SOCKET="${APP_SOCKET}" \
+        NIUNEXUS_RPC_TOKEN="${TOKEN}" \
+        NIUNEXUS_GATEWAY_PREFIX="${GATEWAY_PREFIX}" \
+        NIUNEXUS_DEV=0 \
+        sh -c 'echo $$ > "$1"; exec "$2"' sh "${WEB_PID}" "${WEB_BIN}" >>"${WEB_LOG}" 2>&1 9>&- &
+    local runner=$!
+
+    local i
+    for i in $(seq 1 50); do
+        if ! kill -0 "${runner}" 2>/dev/null && ! alive "${WEB_PID}"; then
+            log_msg "web wrapper exited during startup"
+            rm -f "${WEB_PID}"
+            return 1
+        fi
+        if alive "${WEB_PID}" && [ -S "${APP_SOCKET}" ]; then
+            log_msg "web ready (pid=$(read_pid "${WEB_PID}"))"
+            return 0
+        fi
+        sleep 0.2
+    done
+    log_msg "web socket timeout: ${APP_SOCKET}"
+    return 1
+}
+
+stop_pid() {
+    local pid_file="$1"
+    local socket="$2"
+    local label="$3"
+    local pid=""
+    [ -r "${pid_file}" ] && pid="$(read_pid "${pid_file}")"
+    if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+        log_msg "stopping ${label} (pid=${pid})"
+        kill -TERM "${pid}" 2>/dev/null || true
+        local i
+        for i in $(seq 1 300); do
+            kill -0 "${pid}" 2>/dev/null || break
+            sleep 0.2
+        done
+        if kill -0 "${pid}" 2>/dev/null; then
+            log_msg "killing ${label} (pid=${pid})"
+            kill -KILL "${pid}" 2>/dev/null || true
+        fi
+    fi
+    rm -f "${pid_file}" "${socket}" 2>/dev/null || true
+}
+
+stop_all() {
+    stop_pid "${WEB_PID}" "${APP_SOCKET}" "web"
+    stop_pid "${CORE_PID}" "${CORE_SOCKET}" "core"
+    # Remove a stale gateway socket even if the PID file was lost.
+    rm -f "${APP_SOCKET}" 2>/dev/null || true
+}
+
+status_all() {
+    local core_ok=0
+    local web_ok=0
+    if alive "${CORE_PID}" && [ -S "${CORE_SOCKET}" ]; then core_ok=1; fi
+    if alive "${WEB_PID}" && [ -S "${APP_SOCKET}" ]; then web_ok=1; fi
+    if [ "${core_ok}" = "1" ] && [ "${web_ok}" = "1" ]; then
+        return 0
+    fi
+    return 1
+}
+
+lock_start_stop() {
+    mkdir -p "${VAR_DIR}" 2>/dev/null || true
+    if command -v flock >/dev/null 2>&1; then
+        exec 9>"${LOCK_FILE}" || return 0
+        flock -w 10 9 || log_msg "warning: lifecycle lock timeout"
+    fi
+}
+
+case "${1:-}" in
+start)
+    prepare_dirs
+    lock_start_stop
+    TOKEN="$(make_token)"
+    [ -n "${TOKEN}" ] || fail "无法生成 RPC token"
+    start_core || { stop_all; fail "core 启动失败，请查看 ${CORE_LOG}"; }
+    start_web || { stop_all; fail "web 启动失败，请查看 ${WEB_LOG}"; }
+    log_msg "started ${APP_NAME} (core=$(read_pid "${CORE_PID}") web=$(read_pid "${WEB_PID}"))"
+    exit 0
+    ;;
+stop)
+    mkdir -p "${VAR_DIR}" 2>/dev/null || true
+    lock_start_stop
+    stop_all
+    log_msg "stopped ${APP_NAME}"
+    exit 0
+    ;;
+status)
+    if status_all; then
+        exit 0
+    fi
+    exit 3
+    ;;
+*)
+    echo "Usage: $0 {start|stop|status}" >&2
+    exit 1
+    ;;
+esac

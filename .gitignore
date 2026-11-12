@@ -1,0 +1,21 @@
+# Local toolchains and development artifacts
+.tools/
+.dev/
+
+# Build outputs
+*.fpk
+niunexus/app/server/
+niunexus/app/app.sock
+
+# Runtime data and secrets must never be committed
+**/secrets.json
+**/audit.log
+**/pending-change.json
+**/routing-state.json
+**/ip_forward.original
+**/*.log
+
+# Editor / OS noise
+**/.DS_Store
+*.swp
+*~

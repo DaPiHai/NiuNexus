@@ -1,0 +1,16 @@
+appname               = niunexus
+version               = 0.1.3
+display_name          = NiuNexus 网络管理
+desc                  = 飞牛 fnOS 网络管理：接口、路由、端口转发、网桥/VLAN/聚合与代理
+platform              = x86
+source                = thirdparty
+maintainer            = NiuNexus
+distributor           = NiuNexus
+os_min_version        = 1.2.1010
+desktop_uidir         = ui
+desktop_applaunchname = niunexus.main
+ctl_stop              = true
+checkport             = false
+disable_authorization_path = true
+install_type          = root
+changelog             = 0.1.3：修复顶部刷新按钮，现在会按当前页面重新拉取端口转发计数、接口、路由、代理和系统数据。

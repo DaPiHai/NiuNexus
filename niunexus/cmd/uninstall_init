@@ -1,0 +1,58 @@
+#!/bin/bash
+# Called before uninstall. Stop our processes and remove only resources that
+# belong to NiuNexus. System networking must remain usable afterwards.
+set -u
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+APP_ROOT="$(cd "${TRIM_APPDEST:-/var/apps/niunexus/target}/.." 2>/dev/null && pwd || echo /var/apps/niunexus)"
+VAR_DIR="${TRIM_PKGVAR:-${APP_ROOT}/var}"
+ETC_DIR="${TRIM_PKGETC:-${APP_ROOT}/etc}"
+if [ -x "${APP_ROOT}/cmd/main" ]; then
+    "${APP_ROOT}/cmd/main" stop >/dev/null 2>&1 || true
+fi
+
+# Restore the IPv4 forwarding value saved when NAT/transparent proxy first
+# enabled it. Check the current location and the old runtime location.
+FORWARD_STATE="${ETC_DIR}/ip_forward.original"
+if [ ! -f "${FORWARD_STATE}" ] && [ -f "${VAR_DIR}/ip_forward.original" ]; then
+    FORWARD_STATE="${VAR_DIR}/ip_forward.original"
+fi
+if [ -f "${FORWARD_STATE}" ]; then
+    ORIGINAL="$(tr -d '[:space:]' <"${FORWARD_STATE}" 2>/dev/null || true)"
+    if [ "${ORIGINAL}" = "0" ] || [ "${ORIGINAL}" = "1" ]; then
+        echo "${ORIGINAL}" >/proc/sys/net/ipv4/ip_forward 2>/dev/null || true
+    fi
+    rm -f "${FORWARD_STATE}" 2>/dev/null || true
+fi
+
+# Remove our dedicated nft table only. Never touch the system ruleset.
+if command -v nft >/dev/null 2>&1; then
+    nft delete table inet niunexus >/dev/null 2>&1 || true
+fi
+
+# Clear proxy credentials and routing bookkeeping.
+rm -f "${ETC_DIR}/secrets.json" "${ETC_DIR}/routing-state.json" "${ETC_DIR}/pending-change.json" 2>/dev/null || true
+rm -f "${VAR_DIR}/routing-state.json" "${VAR_DIR}/pending-change.json" "${VAR_DIR}/ip_forward.original" 2>/dev/null || true
+
+# Remove only NetworkManager connections created by NiuNexus.
+if command -v nmcli >/dev/null 2>&1; then
+    nmcli -t -f UUID,NAME connection show 2>/dev/null \
+        | awk -F: '$2 ~ /^niunexus-/ {print $1}' \
+        | while read -r uuid; do
+            if [ -n "${uuid}" ]; then
+                nmcli connection delete "${uuid}" >/dev/null 2>&1 || true
+            fi
+        done
+fi
+
+# Clean up optional boot integration if a previous version installed it.
+UNIT="/etc/systemd/system/niunexus-boot.service"
+DISPATCHER="/etc/NetworkManager/dispatcher.d/90-niunexus"
+if [ -f "${UNIT}" ] || [ -f "${DISPATCHER}" ]; then
+    rm -f "${UNIT}" "${DISPATCHER}" 2>/dev/null || true
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+fi
+
+exit 0

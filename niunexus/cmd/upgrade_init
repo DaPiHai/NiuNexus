@@ -1,0 +1,10 @@
+#!/bin/bash
+# Stop the service before files are replaced.
+set -u
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+APP_ROOT="$(cd "${TRIM_APPDEST:-/var/apps/niunexus/target}/.." 2>/dev/null && pwd || echo /var/apps/niunexus)"
+if [ -x "${APP_ROOT}/cmd/main" ]; then
+    "${APP_ROOT}/cmd/main" stop >/dev/null 2>&1 || true
+fi
+exit 0

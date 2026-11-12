@@ -1,0 +1,17 @@
+{
+  ".url": {
+    "niunexus.main": {
+      "title": "NiuNexus 网络管理",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "",
+      "gatewayPrefix": "/app/niunexus",
+      "gatewaySocket": "app.sock",
+      "url": "/app/niunexus",
+      "allUsers": false,
+      "control": {
+        "accessPerm": "readonly"
+      }
+    }
+  }
+}

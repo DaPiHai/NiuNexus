@@ -1,0 +1,19 @@
+#!/bin/bash
+# Called before installation. Only probe capabilities; never fail an install
+# because a tool is missing - the UI will report degraded capabilities.
+set -u
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+LOG_FILE="${TRIM_TEMP_LOGFILE:-/tmp/niunexus-install.log}"
+missing=()
+for tool in nft ip nmcli; do
+    if ! command -v "${tool}" >/dev/null 2>&1; then
+        missing+=("${tool}")
+    fi
+done
+
+if [ "${#missing[@]}" -gt 0 ]; then
+    echo "NiuNexus 警告: 缺少工具 ${missing[*]}，相关网络功能将不可用。" >>"${LOG_FILE}" 2>/dev/null || true
+fi
+
+exit 0

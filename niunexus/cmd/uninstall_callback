@@ -1,0 +1,6 @@
+#!/bin/bash
+# Called after uninstall. Remove the optional CLI linker if the framework has
+# not already done so. User data/config is removed by fnOS.
+set -u
+rm -f /usr/local/bin/niunexus-cli >/dev/null 2>&1 || true
+exit 0

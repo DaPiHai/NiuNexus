@@ -1,0 +1,12 @@
+#!/bin/bash
+# Configuration migrations live in the core (it validates schemaVersion on
+# start). The fnOS framework restarts the app after an upgrade.
+set -u
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+ETC_DIR="${TRIM_PKGETC:-/var/apps/niunexus/etc}"
+mkdir -p "${ETC_DIR}" 2>/dev/null || true
+if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+    echo "NiuNexus upgraded to ${TRIM_APPVER:-unknown}; configuration preserved." >>"${TRIM_TEMP_LOGFILE}" 2>/dev/null || true
+fi
+exit 0

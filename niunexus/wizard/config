@@ -1,0 +1,23 @@
+[
+  {
+    "stepTitle": "NiuNexus 设置",
+    "items": [
+      {
+        "type": "switch",
+        "field": "wizard_safe_mode",
+        "label": "启用安全模式（保护默认路由网口）",
+        "initValue": "true"
+      },
+      {
+        "type": "select",
+        "field": "wizard_language",
+        "label": "界面语言",
+        "initValue": "zh-CN",
+        "options": [
+          { "label": "简体中文", "value": "zh-CN" },
+          { "label": "English", "value": "en" }
+        ]
+      }
+    ]
+  }
+]

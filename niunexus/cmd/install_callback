@@ -1,0 +1,34 @@
+#!/bin/bash
+# Called after installation. Seed install-time options without overwriting an
+# existing configuration (for example during a reinstall).
+set -u
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+ETC_DIR="${TRIM_PKGETC:-/var/apps/niunexus/etc}"
+mkdir -p "${ETC_DIR}" 2>/dev/null || true
+
+language="${wizard_language:-zh-CN}"
+case "${language}" in
+    zh-CN|en) ;;
+    *) language="zh-CN" ;;
+esac
+
+safe_mode="${wizard_safe_mode:-true}"
+case "${safe_mode}" in
+    false|0|no|off) safe_mode=false ;;
+    *) safe_mode=true ;;
+esac
+
+options="${ETC_DIR}/install-options.json"
+if [ ! -f "${options}" ]; then
+    cat >"${options}" <<EOF
+{
+  "safeMode": ${safe_mode},
+  "language": "${language}"
+}
+EOF
+    chmod 0600 "${options}" 2>/dev/null || true
+    chown root:root "${options}" 2>/dev/null || true
+fi
+
+exit 0

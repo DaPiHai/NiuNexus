@@ -1,0 +1,5 @@
+#!/bin/bash
+# Called before application settings are changed. No destructive action is
+# needed; the next start reads the updated options.
+set -u
+exit 0
